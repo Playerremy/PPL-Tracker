@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0e1014">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>PPL Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0e1014;--card:#171a21;--line:#262b36;--txt:#e9ecf2;--muted:#8a93a6;--acc:#5b8cff;--up:#22c55e;--down:#ef4444;--same:#eab308}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Roboto,sans-serif;background:var(--bg);color:var(--txt);padding-bottom:calc(72px + env(safe-area-inset-bottom))}
+header{padding:18px 16px 8px;font-size:22px;font-weight:700}
+main{padding:4px 12px}
+section{display:none}
+section.on{display:block}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;padding:14px 2px;background:none;border:0;color:var(--muted);font-size:12px}
+nav button.on{color:var(--acc);font-weight:700}
+.seg{display:flex;gap:8px;margin-bottom:12px}
+.seg button{flex:1;padding:12px 4px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--txt);font-weight:600;font-size:14px}
+.seg button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+input,select{background:#0b0d11;color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:16px;width:100%}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+.row{margin-bottom:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:12px}
+.ex-head{display:flex;flex-direction:column;gap:2px;margin-bottom:8px}
+.meta{color:var(--muted);font-size:12px;margin:2px 0}
+.set{display:grid;grid-template-columns:34px 1fr 1fr;gap:6px;margin-bottom:6px;align-items:center}
+.set span{color:var(--muted);font-size:13px}
+.hdr label{margin:0 0 2px}
+.badge,.pill{padding:8px 10px;border-radius:10px;font-size:13px;background:#0b0d11;color:var(--muted);border:1px solid var(--line)}
+.badge{margin-top:8px}
+.badge.up,.pill.up{background:rgba(34,197,94,.15);border-color:var(--up);color:var(--up)}
+.badge.down,.pill.down{background:rgba(239,68,68,.15);border-color:var(--down);color:var(--down)}
+.badge.same,.pill.same{background:rgba(234,179,8,.15);border-color:var(--same);color:var(--same)}
+.pill{border-radius:999px;font-weight:700;white-space:nowrap;align-self:center}
+.btn{display:block;width:100%;padding:14px;border:0;border-radius:12px;background:var(--acc);color:#fff;font-weight:700;font-size:16px;margin:8px 0;text-align:center}
+.btn.ghost{background:var(--card);border:1px solid var(--line);color:var(--txt)}
+.btn.danger{background:#7f1d1d}
+.hrow{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+#toast{position:fixed;top:14px;left:50%;transform:translateX(-50%);background:#e9ecf2;color:#0e1014;padding:10px 16px;border-radius:10px;font-weight:600;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>PPL Tracker</header>
+<main>
+  <section id="t-log" class="on">
+    <div class="seg">
+      <button data-s="A" class="on">A · Push</button>
+      <button data-s="B">B · Pull</button>
+      <button data-s="C">C · Legs</button>
+    </div>
+    <div class="row"><label for="date">Date de la séance</label><input type="date" id="date"></div>
+    <p class="meta" id="status"></p>
+    <div id="form"></div>
+    <button class="btn" id="save">Enregistrer la séance</button>
+  </section>
+
+  <section id="t-charts">
+    <div class="row"><label for="exSel">Exercice</label><select id="exSel"></select></div>
+    <div class="card">
+      <canvas id="chart"></canvas>
+      <p class="meta" id="chartEmpty" style="display:none">Pas encore de données pour cet exercice.</p>
+    </div>
+    <p class="meta">Bleu : charge maximale par séance (kg, axe gauche). Vert : total des répétitions (axe droit).</p>
+  </section>
+
+  <section id="t-history">
+    <div id="hist"></div>
+  </section>
+
+  <section id="t-backup">
+    <div class="card">
+      <p class="meta" style="font-size:14px;color:var(--txt)">Tes données sont stockées uniquement sur cet appareil. Pense à exporter une sauvegarde régulièrement.</p>
+      <button class="btn" id="exp">Exporter (JSON)</button>
+      <label class="btn ghost">Importer une sauvegarde<input type="file" id="imp" accept="application/json" hidden></label>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <button data-tab="log" class="on">Séance</button>
+  <button data-tab="charts">Graphiques</button>
+  <button data-tab="history">Historique</button>
+  <button data-tab="backup">Sauvegarde</button>
+</nav>
+<div id="toast"></div>
+
+<script>
+const KEY = 'ppl-tracker-v1';
+
+const PROGRAM = {
+  A: { name: 'Push (Focus épaules)', ex: [
+    { id: 'a1', name: 'Développé militaire debout', mat: 'Barre', sets: 4, reps: '6-8', rest: '2-3 min' },
+    { id: 'a2', name: 'Développé incliné', mat: 'Haltères', sets: 3, reps: '8-10', rest: '2 min' },
+    { id: 'a3', name: 'Dips (lestés si besoin)', mat: 'Poids de corps', sets: 3, reps: '8-12', rest: '2 min' },
+    { id: 'a4', name: 'Élévations latérales', mat: 'Haltères', sets: 4, reps: '12-15', rest: '1,5 min' },
+    { id: 'a5', name: 'Extension triceps nuque', mat: 'Haltère / KB', sets: 3, reps: '10-12', rest: '1,5 min' },
+  ]},
+  B: { name: "Pull (Dos, arrière d'épaule, biceps)", ex: [
+    { id: 'b1', name: 'Tractions pronation', mat: 'Poids de corps / lesté', sets: 4, reps: '6-8', rest: '2-3 min' },
+    { id: 'b2', name: 'Rowing buste penché (Pendlay)', mat: 'Barre', sets: 3, reps: '8-10', rest: '2 min' },
+    { id: 'b3', name: 'Kettlebell swing lourd', mat: 'Kettlebell', sets: 3, reps: '12-15', rest: '1,5 min' },
+    { id: 'b4', name: 'Oiseau (élévations postérieures)', mat: 'Haltères', sets: 4, reps: '12-15', rest: '1,5 min' },
+    { id: 'b5', name: 'Curl biceps strict', mat: 'Barre ou haltères', sets: 3, reps: '10-12', rest: '1,5 min' },
+  ]},
+  C: { name: 'Legs (Jambes & sangle abdominale)', ex: [
+    { id: 'c1', name: 'Squat (back ou front)', mat: 'Barre', sets: 4, reps: '6-8', rest: '3 min' },
+    { id: 'c2', name: 'Soulevé de terre roumain', mat: 'Barre', sets: 3, reps: '8-10', rest: '2 min' },
+    { id: 'c3', name: 'Squat bulgare (par jambe)', mat: 'Haltères / KB', sets: 3, reps: '10-12', rest: '1,5 min' },
+    { id: 'c4', name: 'Extensions mollets debout', mat: 'Haltères lourds', sets: 4, reps: '15-20', rest: '1,5 min' },
+    { id: 'c5', name: 'Relevé de jambes suspendu', mat: 'Barre fixe', sets: 3, reps: 'échec technique', rest: '1,5 min' },
+  ]},
+};
+
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+let store = load();
+let cur = 'A';
+let editId = null;
+let chart = null;
+
+Chart.defaults.color = '#8a93a6';
+Chart.defaults.borderColor = '#262b36';
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || { sessions: [] }; }
+  catch (e) { return { sessions: [] }; }
+}
+function persist() { localStorage.setItem(KEY, JSON.stringify(store)); }
+
+const allEx = () => Object.values(PROGRAM).flatMap(p => p.ex);
+const exById = id => allEx().find(e => e.id === id);
+const total = sets => sets.reduce((a, s) => a + (Number(s.r) || 0), 0);
+const maxW = sets => Math.max(0, ...sets.map(s => Number(s.w) || 0));
+const fmt = d => new Date(d + 'T12:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: '2-digit' });
+const sortedSessions = () =>
+  [...store.sessions].sort((a, b) => a.date.localeCompare(b.date) || a.created - b.created);
+
+// Dernière séance antérieure (ou à la même date) contenant cet exercice, hors séance en cours d'édition
+function prevFor(exId, date, excludeId) {
+  const list = sortedSessions().filter(s => s.id !== excludeId && s.date <= date && s.data[exId]);
+  if (!list.length) return null;
+  const s = list[list.length - 1];
+  const sets = s.data[exId].sets;
+  return { s, sets, total: total(sets) };
+}
+
+function cmpClass(t, prev) {
+  if (!prev) return '';
+  const d = t - prev.total;
+  return d > 0 ? 'up' : d < 0 ? 'down' : 'same';
+}
+
+function readSets(exId, n) {
+  return Array.from({ length: n }, (_, i) => ({
+    w: document.querySelector(`[data-ex="${exId}"][data-i="${i}"][data-k="w"]`)?.value ?? '',
+    r: document.querySelector(`[data-ex="${exId}"][data-i="${i}"][data-k="r"]`)?.value ?? '',
+  }));
+}
+
+function renderForm() {
+  const date = $('#date').value;
+  const sess = PROGRAM[cur];
+  const existing = store.sessions.find(s => s.date === date && s.letter === cur);
+  editId = existing ? existing.id : null;
+  $('#status').textContent = existing
+    ? 'Séance déjà enregistrée à cette date : tu la modifies.'
+    : 'Nouvelle séance.';
+
+  $('#form').innerHTML = sess.ex.map(ex => {
+    const saved = existing?.data[ex.id]?.sets || [];
+    const prev = prevFor(ex.id, date, editId);
+    const rows = Array.from({ length: ex.sets }, (_, i) => {
+      const v = saved[i] || {};
+      const pw = prev?.sets[i]?.w ?? '';
+      const pr = prev?.sets[i]?.r ?? '';
+      return `<div class="set"><span>S${i + 1}</span>
+        <input type="number" inputmode="decimal" step="0.5" placeholder="${pw !== '' ? pw : 'kg'}" value="${v.w ?? ''}" data-ex="${ex.id}" data-i="${i}" data-k="w">
+        <input type="number" inputmode="numeric" placeholder="${pr !== '' ? pr : 'reps'}" value="${v.r ?? ''}" data-ex="${ex.id}" data-i="${i}" data-k="r"></div>`;
+    }).join('');
+    return `<div class="card">
+      <div class="ex-head"><strong>${ex.name}</strong>
+      <span class="meta">${ex.mat} · ${ex.sets} séries × ${ex.reps} rép. · repos ${ex.rest}</span></div>
+      <div class="set hdr"><span></span><label>Charge (kg)</label><label>Répétitions</label></div>
+      ${rows}
+      <div class="badge" id="b-${ex.id}"></div>
+    </div>`;
+  }).join('');
+  updateBadges();
+}
+
+function updateBadges() {
+  const date = $('#date').value;
+  for (const ex of PROGRAM[cur].ex) {
+    const sets = readSets(ex.id, ex.sets);
+    const badge = $('#b-' + ex.id);
+    if (!badge) continue;
+    const t = total(sets);
+    const entered = sets.some(s => s.r !== '' || s.w !== '');
+    const prev = prevFor(ex.id, date, editId);
+    badge.className = 'badge';
+    if (!entered) { badge.textContent = 'Saisis tes répétitions pour comparer'; continue; }
+    if (!prev) { badge.textContent = `${t} rép. · première référence pour cet exercice`; continue; }
+    const d = t - prev.total;
+    badge.classList.add(cmpClass(t, prev));
+    const sign = d > 0 ? `▲ +${d}` : d < 0 ? `▼ ${d}` : '= égal';
+    badge.textContent = `${sign} · ${t} rép. vs ${prev.total} le ${fmt(prev.s.date)}`;
+  }
+}
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._h);
+  toast._h = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+function saveSession() {
+  const date = $('#date').value;
+  if (!date) return toast('Choisis une date');
+  const data = {};
+  for (const ex of PROGRAM[cur].ex) {
+    const sets = readSets(ex.id, ex.sets).map(s => ({
+      w: s.w === '' ? null : Number(s.w),
+      r: s.r === '' ? null : Number(s.r),
+    }));
+    if (sets.some(s => s.r !== null || s.w !== null)) data[ex.id] = { sets };
+  }
+  if (!Object.keys(data).length) return toast('Rien à enregistrer');
+
+  if (editId) {
+    store.sessions.find(s => s.id === editId).data = data;
+  } else {
+    store.sessions.push({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      created: Date.now(), date, letter: cur, data,
+    });
+  }
+  persist();
+  toast('Séance enregistrée ✔');
+  renderAll();
+}
+
+function renderHistory() {
+  const list = sortedSessions().reverse();
+  $('#hist').innerHTML = list.length ? list.map(s => {
+    const rows = Object.entries(s.data).map(([id, d]) => {
+      const ex = exById(id);
+      const t = total(d.sets);
+      const c = cmpClass(t, prevFor(id, s.date, s.id));
+      const detail = d.sets.map(x => `${x.w ?? '–'}kg×${x.r ?? '–'}`).join(' · ');
+      return `<div class="hrow"><div><b>${ex.name}</b><div class="meta">${detail}</div></div>
+              <span class="pill ${c}">${t} rép.</span></div>`;
+    }).join('');
+    return `<div class="card">
+      <div class="ex-head"><strong>Séance ${s.letter} · ${PROGRAM[s.letter].name}</strong>
+      <span class="meta">${fmt(s.date)}</span></div>
+      ${rows}
+      <button class="btn ghost" data-del="${s.id}">Supprimer cette séance</button>
+    </div>`;
+  }).join('') : '<p class="meta">Aucune séance enregistrée pour l’instant.</p>';
+}
+
+function renderSelect() {
+  const sel = $('#exSel');
+  const keep = sel.value;
+  sel.innerHTML = Object.entries(PROGRAM).map(([k, p]) =>
+    `<optgroup label="Séance ${k} · ${p.name}">${p.ex.map(e => `<option value="${e.id}">${e.name}</option>`).join('')}</optgroup>`
+  ).join('');
+  if (keep) sel.value = keep;
+}
+
+function renderChart() {
+  const exId = $('#exSel').value;
+  const pts = sortedSessions().filter(s => s.data[exId]);
+  chart?.destroy();
+  $('#chartEmpty').style.display = pts.length ? 'none' : 'block';
+  chart = new Chart($('#chart'), {
+    type: 'line',
+    data: {
+      labels: pts.map(s => fmt(s.date)),
+      datasets: [
+        { label: 'Charge max (kg)', data: pts.map(s => maxW(s.data[exId].sets) || null),
+          borderColor: '#5b8cff', backgroundColor: '#5b8cff', yAxisID: 'y', tension: .3, spanGaps: true },
+        { label: 'Répétitions totales', data: pts.map(s => total(s.data[exId].sets)),
+          borderColor: '#22c55e', backgroundColor: '#22c55e', yAxisID: 'y1', tension: .3 },
+      ],
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        y: { position: 'left', title: { display: true, text: 'kg' } },
+        y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'rép.' } },
+      },
+      plugins: { legend: { labels: { color: '#e9ecf2' } } },
+    },
+  });
+}
+
+function renderAll() {
+  renderForm();
+  renderHistory();
+  renderSelect();
+  if ($('#t-charts').classList.contains('on')) renderChart();
+}
+
+// Navigation
+$$('nav button').forEach(b => b.onclick = () => {
+  $$('nav button').forEach(x => x.classList.toggle('on', x === b));
+  $$('section').forEach(s => s.classList.toggle('on', s.id === 't-' + b.dataset.tab));
+  if (b.dataset.tab === 'charts') renderChart();
+  if (b.dataset.tab === 'history') renderHistory();
+});
+
+// Choix de séance
+$$('.seg button').forEach(b => b.onclick = () => {
+  cur = b.dataset.s;
+  $$('.seg button').forEach(x => x.classList.toggle('on', x === b));
+  renderForm();
+});
+
+$('#form').addEventListener('input', updateBadges);
+$('#date').addEventListener('change', renderForm);
+$('#save').onclick = saveSession;
+$('#exSel').addEventListener('change', renderChart);
+
+$('#hist').addEventListener('click', e => {
+  const id = e.target.dataset.del;
+  if (!id || !confirm('Supprimer cette séance ?')) return;
+  store.sessions = store.sessions.filter(s => s.id !== id);
+  persist();
+  renderAll();
+});
+
+// Sauvegarde / import / export
+$('#exp').onclick = () => {
+  const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `ppl-${new Date().toLocaleDateString('sv-SE')}.json`;
+  a.click();
+};
+$('#imp').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data.sessions)) throw new Error();
+    store = data;
+    persist();
+    renderAll();
+    toast('Sauvegarde importée ✔');
+  } catch (err) {
+    toast('Fichier invalide');
+  }
+});
+
+// Init
+$('#date').value = new Date().toLocaleDateString('sv-SE');
+renderAll();
+</script>
+</body>
+</html>
